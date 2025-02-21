@@ -150,17 +150,11 @@ for epoch in range(args.epochs):
         optimizer_ir = optimizer_scheduler(optimizer_ir, p=p)
         optimizer_depth = optimizer_scheduler(optimizer_depth, p=p)
         
-        optimizer_rgb.zero_grad()
-        total_loss_rgb.backward()
-        optimizer_rgb.step()
-        
-        optimizer_ir.zero_grad()
-        total_loss_ir.backward()
-        optimizer_ir.step()
-        
-        optimizer_depth.zero_grad()
-        total_loss_depth.backward()
-        optimizer_depth.step()
+        for optimizer, loss in zip([optimizer_rgb, optimizer_ir, optimizer_depth], 
+                                   [total_loss_rgb, total_loss_ir, total_loss_depth]):
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
         if (step + 1) % log_step == 0:
             logging.info('[epoch %d step %d]  rgb_loss: %.4f  ir_loss: %.4f  depth_loss: %.4f  total_loss: %.4f'
