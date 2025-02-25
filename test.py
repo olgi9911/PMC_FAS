@@ -1,5 +1,6 @@
 import torch
 from models.dann import DANN
+from models.mmg import MMG
 import torch.optim as optim
 import torch.nn as nn
 import numpy as np
@@ -50,7 +51,11 @@ if pmc:
     results_filename += '_PMC'
     
 results_path = '/shared/yitinglin/PMC/' + results_filename
-file_handler = logging.FileHandler(filename='/home/s113062513/PMC/logger/'+ results_filename +'_test.log')
+if not missing:
+    file_handler = logging.FileHandler(filename='/home/s113062513/PMC/logger/'+ results_filename +'_test.log')
+else:
+    file_handler = logging.FileHandler(filename='/home/s113062513/PMC/logger/'+ results_filename + '_missing_' + missing + '_test.log')
+
 stdout_handler = logging.StreamHandler(stream=sys.stdout)
 handlers = [file_handler, stdout_handler]
 date = '%(asctime)s %(levelname)s: %(message)s'
@@ -61,9 +66,20 @@ logging.info(f"Test on {target}")
 dann_rgb = DANN(num_classes=2, num_domains=2).to(device_id)
 dann_ir = DANN(num_classes=2, num_domains=2).to(device_id)
 dann_depth = DANN(num_classes=2, num_domains=2).to(device_id)
+mmg_ir = None
+mmg_depth = None
+
+if 'ir' in missing:
+    mmg_ir = MMG(n_channels=3, n_classes=2).to(device_id)
+    mmg_ir.eval()
+    mmg_ir.load_state_dict(torch.load(results_path + '_MMG/mmg_ir.pth'))
+if 'depth' in missing:
+    mmg_depth = MMG(n_channels=3, n_classes=2).to(device_id)
+    mmg_depth.eval()
+    mmg_depth.load_state_dict(torch.load(results_path + '_MMG/mmg_depth.pth'))
 
 for protocol in target.split('/'):
-    target_dataset = FAS_Dataset(root=root, protocol=[protocol], train=True)
+    target_dataset = FAS_Dataset(root=root, protocol=[protocol], train=False)
     if protocol == target.split('/')[0]:
         combined_target_dataset = target_dataset
     else:
@@ -111,6 +127,16 @@ with torch.no_grad():
             pred_rgb, _ = dann_rgb(rgb_img, 0) # alpha = 0, which does not matter in testing
             pred_ir, _ = dann_ir(ir_img, 0)
             pred_depth, _ = dann_depth(depth_img, 0)
+
+            if 'ir' in missing:
+                pseudo_labels = torch.nn.functional.one_hot(torch.argmax(pred_rgb, dim=1), num_classes=2).float().to(device_id)
+                ir_img = mmg_ir(rgb_img, class_labels=pseudo_labels)
+                pred_ir, _ = dann_depth(normalize_imagenet(ir_img), 0)
+            if 'depth' in missing:
+                pseudo_labels = torch.nn.functional.one_hot(torch.argmax(pred_rgb, dim=1), num_classes=2).float().to(device_id)
+                depth_img = mmg_depth(rgb_img, class_labels=pseudo_labels)
+                pred_depth, _ = dann_depth(normalize_imagenet(depth_img), 0)
+
             pred = (pred_rgb + pred_ir + pred_depth) / 3
 
             score = F.softmax(pred, dim=1)[:, 1].cpu().numpy()
