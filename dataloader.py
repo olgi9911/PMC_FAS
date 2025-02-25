@@ -9,7 +9,7 @@ import glob
 import random
 import numpy as np
 import torchvision.transforms.functional as TF
-
+from torch.utils.data.sampler import SubsetRandomSampler
 
 def get_frame(path):
     
@@ -367,6 +367,13 @@ def get_inf_iterator(data_loader):
     while True:
         for rgb_img, depth_img, ir_img, labels in data_loader:
             yield (rgb_img, depth_img, ir_img, labels)
+
+def create_dataloader_with_sampler(dataset, selected_indices, batch_size):
+    """
+    Create a DataLoader with SubsetRandomSampler.
+    """
+    sampler = SubsetRandomSampler(selected_indices)
+    return DataLoader(dataset, batch_size=batch_size, sampler=sampler)
 
 import cv2
 if __name__ == "__main__":

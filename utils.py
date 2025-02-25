@@ -71,7 +71,8 @@ class ReverseLayerF(Function):
 
         return output, None
     
-    
+
+''' Stolen from https://github.com/NaJaeMin92/pytorch-DANN'''
 def optimizer_scheduler(optimizer, p):
     """
     Adjust the learning rate of optimizer
