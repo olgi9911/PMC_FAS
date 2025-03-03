@@ -26,7 +26,7 @@ parser.add_argument("--test_dataset", type=str)
 parser.add_argument("--missing", type=str, default='none')
 parser.add_argument("--epochs", type=int, default=40)
 parser.add_argument("--batch_size", type=int, default=16)
-parser.add_argument("--lr", type=float, default=0.0015)
+parser.add_argument("--lr", type=float, default=0.00015)
 parser.add_argument("--trade_off", type=float, default=0.1)
 args = parser.parse_args()
 
@@ -43,8 +43,8 @@ model_save_epoch = 1
 device_id = 'cuda:0'
 root='/var/mplab_share_data'
 results_filename = source.replace('/', '') + '_to_' + target.replace('/', '')
-results_path = '/shared/yitinglin/PMC/' + results_filename + '_MMG'
-# os.system("rm -r "+results_path)
+results_path = root + '/yitinglin/PMC/' + results_filename + '_MMG'
+os.system("rm -r "+results_path)
 mkdir(results_path)
 # mkdir('/home/s113062513/PMC/logger/')
 file_handler = logging.FileHandler(filename='/home/s113062513/PMC/logger/'+ results_filename +'_MMG_' + missing + '.log')

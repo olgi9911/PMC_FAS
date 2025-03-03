@@ -1,9 +1,29 @@
 import torch
 import numpy as np
 import os
+import heapq
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 from torch.autograd import Function
+from torch.utils.data import DataLoader
+from torch.utils.data import Subset
+
+def select_top_r_samples(top_r_samples, softmax_values, pseudo_labels, r, num_target_samples, start_idx):
+    samples = [(softmax_values[i].item(), start_idx + i, pseudo_labels[i].item()) for i in range(len(softmax_values))]
+    for item in samples:
+        if len(top_r_samples) < r * num_target_samples:
+            heapq.heappush(top_r_samples, item)
+        else:
+            heapq.heappushpop(top_r_samples, item)
+    return top_r_samples
+
+def create_subset_loader(top_r_samples, dataset, shuffled_indices, batch_size):
+        confidence_scores, indices, pseudo_labels = zip(*[(softmax, index, label) for softmax, index, label in top_r_samples])
+        confidence_scores = torch.tensor(confidence_scores)
+        pseudo_labels = torch.tensor(pseudo_labels)
+        target_subset = Subset(dataset, [shuffled_indices[i] for i in indices])
+        return DataLoader(target_subset, batch_size=batch_size, shuffle=False), confidence_scores, pseudo_labels
+
 
 def mkdir(path):
     if not os.path.exists(path):
@@ -57,6 +77,20 @@ def Find_Optimal_Cutoff(TPR, FPR, threshold):
     point = [FPR[Youden_index], TPR[Youden_index]]
     return optimal_threshold, point
 
+    
+''' Stolen from https://github.com/NaJaeMin92/pytorch-DANN'''
+def optimizer_scheduler(optimizer, p):
+    """
+    Adjust the learning rate of optimizer
+    :param optimizer: optimizer for updating parameters
+    :param p: a variable for adjusting learning rate
+    :return: optimizer
+    """
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = 0.01 / (1. + 10 * p) ** 0.75
+
+    return optimizer
+
 class ReverseLayerF(Function):
 
     @staticmethod
@@ -70,17 +104,3 @@ class ReverseLayerF(Function):
         output = grad_output.neg() * ctx.alpha
 
         return output, None
-    
-
-''' Stolen from https://github.com/NaJaeMin92/pytorch-DANN'''
-def optimizer_scheduler(optimizer, p):
-    """
-    Adjust the learning rate of optimizer
-    :param optimizer: optimizer for updating parameters
-    :param p: a variable for adjusting learning rate
-    :return: optimizer
-    """
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = 0.01 / (1. + 10 * p) ** 0.75
-
-    return optimizer

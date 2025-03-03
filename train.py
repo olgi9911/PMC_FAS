@@ -41,7 +41,7 @@ model_save_epoch = 1
 device_id = 'cuda:0'
 root='/var/mplab_share_data'
 results_filename = source.replace('/', '') + '_to_' + target.replace('/', '')
-results_path = '/shared/yitinglin/PMC/' + results_filename
+results_path = root + '/yitinglin/PMC/' + results_filename
 os.system("rm -r "+results_path)
 mkdir(results_path)
 mkdir('/home/s113062513/PMC/logger/')

@@ -20,8 +20,7 @@ import gc
 from utils import *
 from torch.utils.data import DataLoader as Dataloader
 from torch.utils.data import ConcatDataset
-from torch.utils.data import TensorDataset
-from torch.utils.data import Subset
+
 
 parser = argparse.ArgumentParser(description="config")
 parser.add_argument("--train_dataset", type=str)
@@ -45,7 +44,7 @@ model_save_epoch = 1
 device_id = 'cuda:0'
 root='/var/mplab_share_data'
 results_filename = source.replace('/', '') + '_to_' + target.replace('/', '')
-results_path = '/shared/yitinglin/PMC/' + results_filename
+results_path = root + '/yitinglin/PMC/' + results_filename
 mkdir(results_path + '_PMC')
 file_handler = logging.FileHandler(filename='/home/s113062513/PMC/logger/'+ results_filename +'_adapt.log')
 stdout_handler = logging.StreamHandler(stream=sys.stdout)
@@ -103,8 +102,6 @@ num_target_samples = len(target_loader.dataset)
 len_target_loader = len(target_loader)
 iternum = max(len(source_loader), len(target_loader))
 logging.info(f"iternum={iternum}")
-#source_loader = get_inf_iterator(source_loader)
-#target_loader = get_inf_iterator(target_loader)
 
 length = int(len(glob.glob(results_path + '/*.pth')) / 3) # 3 modalities
 
@@ -201,15 +198,10 @@ for epoch in range(args.epochs):
             softmax_values_depth, pseudo_labels_depth = F.softmax(class_pred_depth, dim=1).max(dim=1)
             softmax_values_fused, pseudo_labels_fused = F.softmax(class_pred_rgb + class_pred_ir + class_pred_depth, dim=1).max(dim=1)
 
-            def select_top_r_samples(top_r_samples, softmax_values, pseudo_labels, r, num_target_samples):
-                samples = [(softmax_values[i].item(), start_idx + i, pseudo_labels[i].item()) for i in range(len(softmax_values))]
-                top_r_samples.extend(samples)
-                return sorted(top_r_samples, key=lambda x: x[0], reverse=True)[:int(r * num_target_samples)]
-
-            top_r_samples_rgb = select_top_r_samples(top_r_samples_rgb, softmax_values_rgb, pseudo_labels_rgb, r_rgb, num_target_samples)
-            top_r_samples_ir = select_top_r_samples(top_r_samples_ir, softmax_values_ir, pseudo_labels_ir, r_ir, num_target_samples)
-            top_r_samples_depth = select_top_r_samples(top_r_samples_depth, softmax_values_depth, pseudo_labels_depth, r_depth, num_target_samples)
-            top_r_samples_fused = select_top_r_samples(top_r_samples_fused, softmax_values_fused, pseudo_labels_fused, r_fused, num_target_samples)
+            top_r_samples_rgb = select_top_r_samples(top_r_samples_rgb, softmax_values_rgb, pseudo_labels_rgb, r_rgb, num_target_samples, start_idx)
+            top_r_samples_ir = select_top_r_samples(top_r_samples_ir, softmax_values_ir, pseudo_labels_ir, r_ir, num_target_samples, start_idx)
+            top_r_samples_depth = select_top_r_samples(top_r_samples_depth, softmax_values_depth, pseudo_labels_depth, r_depth, num_target_samples, start_idx)
+            top_r_samples_fused = select_top_r_samples(top_r_samples_fused, softmax_values_fused, pseudo_labels_fused, r_fused, num_target_samples, start_idx)
         # ============ Select top r^M% pseudo-labeled target samples with high classification confidence scores ============ #
 
 
@@ -232,105 +224,85 @@ for epoch in range(args.epochs):
                          % (epoch + 1, step + 1, total_loss_rgb.item(), total_loss_ir.item(), total_loss_depth.item(), total_loss_rgb.item() + total_loss_ir.item() + total_loss_depth.item()))
 
 
-    # At the end of each epoch, create new DataLoader objects from the selected samples and their pseudo labels
-    # Modality-Specific Sample Selection (MSS)
-    def MSS():
-        if len(top_r_samples_rgb) > 0:
-            confidence_scores, indices, rgb_labels = zip(*[(softmax, index, label) for softmax, index, label in top_r_samples_rgb])
-            confidence_scores = torch.tensor(confidence_scores)
-            rgb_labels = torch.tensor(rgb_labels)
-            target_subset = Subset(combined_target_dataset, [shuffled_indices[i] for i in indices])
-            rgb_loader = DataLoader(target_subset, batch_size=batch_size, shuffle=False)
-        
-            for rgb_img, _, _, _ in rgb_loader:
-                confidence = confidence_scores[:rgb_img.size(0)]
-                pseudo_labels = rgb_labels[:rgb_img.size(0)]
-                class_pred_rgb, _ = dann_rgb(normalize_imagenet(rgb_img.to(device_id)), alpha) # alpha does not affect the image classifier
-                class_loss_rgb = (confidence.to(device_id) * classifier_criterion(class_pred_rgb, pseudo_labels.to(device_id))).mean()
-
-                optimizer_rgb.zero_grad()
-                class_loss_rgb.backward()
-                optimizer_rgb.step()
-
-                # Remove the processed elements from confidence_scores and rgb_labels
-                confidence_scores = confidence_scores[rgb_img.size(0):]
-                rgb_labels = rgb_labels[rgb_img.size(0):]
-
-        if len(top_r_samples_ir) > 0:
-            confidence_scores, indices, ir_labels = zip(*[(softmax, index, label) for softmax, index, label in top_r_samples_ir])
-            confidence_scores = torch.tensor(confidence_scores)
-            ir_labels = torch.tensor(ir_labels)
-            target_subset = Subset(combined_target_dataset, [shuffled_indices[i] for i in indices])
-            ir_loader = DataLoader(target_subset, batch_size=batch_size, shuffle=False)
-        
-            for _, ir_img, _, _ in ir_loader:
-                confidence = confidence_scores[:ir_img.size(0)]
-                pseudo_labels = ir_labels[:ir_img.size(0)]
-                class_pred_ir, _ = dann_ir(normalize_imagenet(ir_img.to(device_id)), alpha)
-                class_loss_ir = (confidence.to(device_id) * classifier_criterion(class_pred_ir, pseudo_labels.to(device_id))).mean()
-
-                optimizer_ir.zero_grad()
-                class_loss_ir.backward()
-                optimizer_ir.step()
-
-                # Remove the processed elements from confidence_scores and ir_labels
-                confidence_scores = confidence_scores[ir_img.size(0):]
-                ir_labels = ir_labels[ir_img.size(0):]
-
-        if len(top_r_samples_depth) > 0:
-            confidence_scores, indices, depth_labels = zip(*[(softmax, index, label) for softmax, index, label in top_r_samples_depth])
-            confidence_scores = torch.tensor(confidence_scores)
-            depth_labels = torch.tensor(depth_labels)
-            target_subset = Subset(combined_target_dataset, [shuffled_indices[i] for i in indices])
-            depth_loader = DataLoader(target_subset, batch_size=batch_size, shuffle=False)
-        
-            for _, _, depth_img, _ in depth_loader:
-                confidence = confidence_scores[:depth_img.size(0)]
-                pseudo_labels = depth_labels[:depth_img.size(0)]
-                class_pred_depth, _ = dann_depth(normalize_imagenet(depth_img.to(device_id)), alpha)
-                class_loss_depth = (confidence.to(device_id) * classifier_criterion(class_pred_depth, pseudo_labels.to(device_id))).mean()
-
-                optimizer_depth.zero_grad()
-                class_loss_depth.backward()
-                optimizer_depth.step()
-
-                # Remove the processed elements from confidence_scores and depth_labels
-                confidence_scores = confidence_scores[depth_img.size(0):]
-                depth_labels = depth_labels[depth_img.size(0):]
-
-    # Modality-Integrated Sample Selection (MIS)
-    def MIS():
-        if len(top_r_samples_fused) > 0:
-            confidence_scores, indices, fused_labels = zip(*[(softmax, index, label) for softmax, index, label in top_r_samples_fused])
-            target_subset = Subset(combined_target_dataset, [shuffled_indices[i] for i in indices])
-            confidence_scores = torch.tensor(confidence_scores)
-            fused_labels = torch.tensor(fused_labels)
-            fused_loader = DataLoader(target_subset, batch_size=batch_size, shuffle=False)
-        
-            for rgb_img, ir_img, depth_img, _ in fused_loader:
-                confidence = confidence_scores[:rgb_img.size(0)]
-                pseudo_labels = fused_labels[:rgb_img.size(0)]
-                class_pred_rgb, _ = dann_rgb(normalize_imagenet(rgb_img.to(device_id)), alpha)
-                class_pred_ir, _ = dann_ir(normalize_imagenet(ir_img.to(device_id)), alpha)
-                class_pred_depth, _ = dann_depth(normalize_imagenet(depth_img.to(device_id)), alpha)
-                class_loss_rgb = (confidence.to(device_id) * classifier_criterion(class_pred_rgb, pseudo_labels.to(device_id))).mean()
-                class_loss_ir = (confidence.to(device_id) * classifier_criterion(class_pred_ir, pseudo_labels.to(device_id))).mean()
-                class_loss_depth = (confidence.to(device_id) * classifier_criterion(class_pred_depth, pseudo_labels.to(device_id))).mean()
-
-                for optimizer, loss in zip([optimizer_rgb, optimizer_ir, optimizer_depth], 
-                                            [class_loss_rgb, class_loss_ir, class_loss_depth]):
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-
-                # Remove the processed elements from confidence_scores and fused_labels
-                confidence_scores = confidence_scores[rgb_img.size(0):]
-                fused_labels = fused_labels[rgb_img.size(0):]
-
-    MSS()
     logging.info("Modality-Specific Sample Selection (MSS) with r_rgb = %.2f, r_ir = %.2f, r_depth = %.2f" % (r_rgb, r_ir, r_depth))
-    MIS()
+    # Modality-Specific Sample Selection (MSS)
+    # At the end of each epoch, create new DataLoader objects from the selected samples and their pseudo labels
+    if len(top_r_samples_rgb) > 0:
+        rgb_loader, confidence_scores, rgb_labels = create_subset_loader(top_r_samples_rgb, combined_target_dataset, shuffled_indices, batch_size)
+
+        for rgb_img, _, _, _ in rgb_loader:
+            confidence = confidence_scores[:rgb_img.size(0)]
+            pseudo_labels = rgb_labels[:rgb_img.size(0)]
+            class_pred_rgb, _ = dann_rgb(normalize_imagenet(rgb_img.to(device_id)), alpha) # alpha does not affect the image classifier
+            class_loss_rgb = (confidence.to(device_id) * classifier_criterion(class_pred_rgb, pseudo_labels.to(device_id))).mean()
+
+            optimizer_rgb.zero_grad()
+            class_loss_rgb.backward()
+            optimizer_rgb.step()
+
+            # Remove the processed elements from confidence_scores and rgb_labels
+            confidence_scores = confidence_scores[rgb_img.size(0):]
+            rgb_labels = rgb_labels[rgb_img.size(0):]
+
+    if len(top_r_samples_ir) > 0:
+        ir_loader, confidence_scores, ir_labels = create_subset_loader(top_r_samples_ir, combined_target_dataset, shuffled_indices, batch_size)
+    
+        for _, ir_img, _, _ in ir_loader:
+            confidence = confidence_scores[:ir_img.size(0)]
+            pseudo_labels = ir_labels[:ir_img.size(0)]
+            class_pred_ir, _ = dann_ir(normalize_imagenet(ir_img.to(device_id)), alpha)
+            class_loss_ir = (confidence.to(device_id) * classifier_criterion(class_pred_ir, pseudo_labels.to(device_id))).mean()
+
+            optimizer_ir.zero_grad()
+            class_loss_ir.backward()
+            optimizer_ir.step()
+
+            # Remove the processed elements from confidence_scores and ir_labels
+            confidence_scores = confidence_scores[ir_img.size(0):]
+            ir_labels = ir_labels[ir_img.size(0):]
+
+    if len(top_r_samples_depth) > 0:
+        depth_loader, confidence_scores, depth_labels = create_subset_loader(top_r_samples_depth, combined_target_dataset, shuffled_indices, batch_size)
+    
+        for _, _, depth_img, _ in depth_loader:
+            confidence = confidence_scores[:depth_img.size(0)]
+            pseudo_labels = depth_labels[:depth_img.size(0)]
+            class_pred_depth, _ = dann_depth(normalize_imagenet(depth_img.to(device_id)), alpha)
+            class_loss_depth = (confidence.to(device_id) * classifier_criterion(class_pred_depth, pseudo_labels.to(device_id))).mean()
+
+            optimizer_depth.zero_grad()
+            class_loss_depth.backward()
+            optimizer_depth.step()
+
+            # Remove the processed elements from confidence_scores and depth_labels
+            confidence_scores = confidence_scores[depth_img.size(0):]
+            depth_labels = depth_labels[depth_img.size(0):]
+
+
     logging.info("Modality-Integrated Sample Selection (MIS) with r_fused = %.2f" % r_fused)
+    # Modality-Integrated Sample Selection (MIS)
+    if len(top_r_samples_fused) > 0:
+        fused_loader, confidence_scores, fused_labels = create_subset_loader(top_r_samples_fused, combined_target_dataset, shuffled_indices, batch_size)
+    
+        for rgb_img, ir_img, depth_img, _ in fused_loader:
+            confidence = confidence_scores[:rgb_img.size(0)]
+            pseudo_labels = fused_labels[:rgb_img.size(0)]
+            class_pred_rgb, _ = dann_rgb(normalize_imagenet(rgb_img.to(device_id)), alpha)
+            class_pred_ir, _ = dann_ir(normalize_imagenet(ir_img.to(device_id)), alpha)
+            class_pred_depth, _ = dann_depth(normalize_imagenet(depth_img.to(device_id)), alpha)
+            class_loss_rgb = (confidence.to(device_id) * classifier_criterion(class_pred_rgb, pseudo_labels.to(device_id))).mean()
+            class_loss_ir = (confidence.to(device_id) * classifier_criterion(class_pred_ir, pseudo_labels.to(device_id))).mean()
+            class_loss_depth = (confidence.to(device_id) * classifier_criterion(class_pred_depth, pseudo_labels.to(device_id))).mean()
+
+            for optimizer, loss in zip([optimizer_rgb, optimizer_ir, optimizer_depth], 
+                                        [class_loss_rgb, class_loss_ir, class_loss_depth]):
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            # Remove the processed elements from confidence_scores and fused_labels
+            confidence_scores = confidence_scores[rgb_img.size(0):]
+            fused_labels = fused_labels[rgb_img.size(0):]
 
 
     # Calculate average accuracy for the current epoch
